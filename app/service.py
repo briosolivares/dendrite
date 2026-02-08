@@ -330,6 +330,32 @@ def get_graph_current_truth(driver: Driver) -> dict:
     }
 
 
+def get_graph_changes_since(driver: Driver, since_iso8601: str) -> dict:
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        result = session.run(
+            """
+            MATCH (gc:GraphCommit)
+            WHERE datetime(gc.timestamp) >= datetime($since_iso8601)
+            RETURN
+              gc.commit_id AS commit_id,
+              gc.sequence_number AS sequence_number,
+              gc.parent_commit_id AS parent_commit_id,
+              gc.actor_user_id AS actor_user_id,
+              gc.timestamp AS timestamp,
+              gc.source AS source,
+              gc.diff_json AS diff_json,
+              gc.why AS why,
+              gc.commit_message AS commit_message
+            ORDER BY gc.sequence_number ASC
+            """,
+            since_iso8601=since_iso8601,
+        )
+        commits = [record.data() for record in result]
+
+    return {"since": since_iso8601, "commits": commits}
+
+
 def get_configured_project_ids() -> list[str]:
     return [project.project_id for project in load_projects_config().projects]
 

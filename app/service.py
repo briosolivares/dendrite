@@ -86,6 +86,9 @@ def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
     if event_payload.get("type") != "message":
         return False, {"ok": True, "status": "ignored", "reason": "unsupported_event_type"}
 
+    projects_config = load_projects_config()
+    configured_channel_id = projects_config.slack.channel_id
+
     event_id = payload.get("event_id")
     channel_id = event_payload.get("channel", "")
     ts = event_payload.get("ts", "")
@@ -109,6 +112,21 @@ def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
             error_reason="bot_or_subtype_message",
         )
         return False, {"ok": True, "status": "ignored", "reason": "bot_or_subtype_message"}
+
+    if channel_id != configured_channel_id:
+        _persist_slack_message(
+            driver,
+            message_id=message_id,
+            event_id=event_id,
+            ts=ts,
+            channel_id=channel_id,
+            user_id=user_id,
+            raw_text=raw_text,
+            permalink="",
+            ingestion_status="ignored",
+            error_reason="unexpected_channel",
+        )
+        return False, {"ok": True, "status": "ignored", "reason": "unexpected_channel"}
 
     permalink = resolve_source_permalink(channel_id=channel_id, message_ts=ts)
     try:

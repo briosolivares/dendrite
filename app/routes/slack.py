@@ -3,11 +3,10 @@ import hmac
 import time
 
 from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import ValidationError
 
 from app.models import SlackEvent
 from app.config import get_settings
-from app.service import process_slack_event
+from app.service import preprocess_slack_event, process_slack_event
 
 router = APIRouter()
 MAX_SLACK_TIMESTAMP_AGE_SECONDS = 60 * 5
@@ -67,14 +66,14 @@ async def ingest_slack_event(request: Request) -> dict:
             )
         return {"challenge": challenge}
 
-    event_payload = payload.get("event", {})
-    try:
-        event = SlackEvent.model_validate(event_payload)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid Slack event payload: {exc}",
-        ) from exc
+    driver = getattr(request.app.state, "neo4j_driver", None)
+    if driver is None:
+        raise HTTPException(status_code=503, detail="Neo4j driver is not initialized")
 
+    should_process, result = preprocess_slack_event(driver=driver, payload=payload)
+    if not should_process:
+        return result
+
+    event = SlackEvent.model_validate(result["event"])
     parsed = process_slack_event(event)
-    return {"ok": True, "parsed": parsed.model_dump()}
+    return {**result, "parsed": parsed.model_dump()}

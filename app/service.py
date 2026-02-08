@@ -1,10 +1,14 @@
+import asyncio
 import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from neo4j import Driver
+from neo4j import ManagedTransaction
 from pydantic import ValidationError
 
 from app.config import get_settings, load_projects_config
@@ -12,6 +16,7 @@ from app.models import BootstrapResponse, ParsedMessage, ProposedGraphDiff, Slac
 from app.parser import parse_constraint_update, parse_dependency_update, parse_event
 
 logger = logging.getLogger(__name__)
+COMMIT_APPLY_LOCK = asyncio.Lock()
 
 
 def process_slack_event(
@@ -63,6 +68,109 @@ def send_thread_feedback_stub(channel_id: str, thread_ts: str, text: str) -> Non
         thread_ts,
         text,
     )
+
+
+def _build_commit_message(proposed_diff: ProposedGraphDiff) -> str:
+    if proposed_diff.constraint is not None:
+        return (
+            "ConstraintUpsert "
+            f"project={proposed_diff.constraint.project_id} "
+            f"key={proposed_diff.constraint.constraint_key} "
+            f"why={proposed_diff.reason}"
+        )
+    if proposed_diff.dependency is not None:
+        return (
+            "DependencyAdd "
+            f"from={proposed_diff.dependency.from_project_id} "
+            f"to={proposed_diff.dependency.to_project_id} "
+            f"why={proposed_diff.reason}"
+        )
+    return f"{proposed_diff.update_type} why={proposed_diff.reason}"
+
+
+def _create_graph_commit_tx(
+    tx: ManagedTransaction,
+    *,
+    commit_id: str,
+    actor_user_id: str,
+    timestamp: str,
+    source: str,
+    diff_json: str,
+    why: str,
+    commit_message: str,
+) -> dict:
+    latest = tx.run(
+        """
+        MATCH (gc:GraphCommit)
+        RETURN gc.commit_id AS commit_id, gc.sequence_number AS sequence_number
+        ORDER BY gc.sequence_number DESC
+        LIMIT 1
+        """
+    ).single()
+
+    if latest is None:
+        sequence_number = 1
+        parent_commit_id = None
+    else:
+        sequence_number = int(latest["sequence_number"]) + 1
+        parent_commit_id = latest["commit_id"]
+
+    tx.run(
+        """
+        CREATE (gc:GraphCommit {
+            commit_id: $commit_id,
+            sequence_number: $sequence_number,
+            parent_commit_id: $parent_commit_id,
+            actor_user_id: $actor_user_id,
+            timestamp: $timestamp,
+            source: $source,
+            diff_json: $diff_json,
+            why: $why,
+            commit_message: $commit_message
+        })
+        """,
+        commit_id=commit_id,
+        sequence_number=sequence_number,
+        parent_commit_id=parent_commit_id,
+        actor_user_id=actor_user_id,
+        timestamp=timestamp,
+        source=source,
+        diff_json=diff_json,
+        why=why,
+        commit_message=commit_message,
+    ).consume()
+
+    return {
+        "commit_id": commit_id,
+        "sequence_number": sequence_number,
+        "parent_commit_id": parent_commit_id,
+        "actor_user_id": actor_user_id,
+        "timestamp": timestamp,
+        "source": source,
+        "diff_json": diff_json,
+        "why": why,
+        "commit_message": commit_message,
+    }
+
+
+def create_graph_commit(driver: Driver, proposed_diff: ProposedGraphDiff, source: str = "slack") -> dict:
+    commit_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat()
+    diff_json = json.dumps(proposed_diff.model_dump(), sort_keys=True)
+    commit_message = _build_commit_message(proposed_diff)
+
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        return session.execute_write(
+            _create_graph_commit_tx,
+            commit_id=commit_id,
+            actor_user_id=proposed_diff.actor_user_id,
+            timestamp=timestamp,
+            source=source,
+            diff_json=diff_json,
+            why=proposed_diff.reason,
+            commit_message=commit_message,
+        )
 
 
 def get_configured_project_ids() -> list[str]:

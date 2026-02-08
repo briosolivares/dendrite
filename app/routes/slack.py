@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.models import SlackEvent
 from app.config import get_settings
 from app.service import (
+    COMMIT_APPLY_LOCK,
+    create_graph_commit,
     find_unknown_project_ids,
     get_configured_project_ids,
     is_constraint_no_op,
@@ -165,5 +167,9 @@ async def ingest_slack_event(request: Request) -> dict:
                 "reason": "dependency_no_op_duplicate",
                 "parsed": parsed.model_dump(),
             }
+
+        async with COMMIT_APPLY_LOCK:
+            commit = create_graph_commit(driver, parsed.proposed_diff, source="slack")
+        return {**result, "parsed": parsed.model_dump(), "commit": commit}
 
     return {**result, "parsed": parsed.model_dump()}

@@ -186,6 +186,22 @@ async def ingest_slack_event(request: Request) -> dict:
                 parsed.proposed_diff, commit, conflicts
             )
             log_conflict_notification_stub(notification_payload)
+        else:
+            project_id = ""
+            if parsed.proposed_diff.constraint is not None:
+                project_id = parsed.proposed_diff.constraint.project_id
+            elif parsed.proposed_diff.dependency is not None:
+                project_id = parsed.proposed_diff.dependency.from_project_id
+
+            send_thread_feedback_stub(
+                channel_id=event.channel,
+                thread_ts=event.ts,
+                text=(
+                    f"Committed: {commit['commit_id']} | "
+                    f"project: {project_id} | "
+                    f"summary: {commit['commit_message']}"
+                ),
+            )
 
         return {
             **result,

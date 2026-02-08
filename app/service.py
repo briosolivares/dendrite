@@ -287,6 +287,49 @@ def create_graph_commit(driver: Driver, proposed_diff: ProposedGraphDiff, source
         )
 
 
+def get_graph_current_truth(driver: Driver) -> dict:
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        constraints_result = session.run(
+            """
+            MATCH (p:Project)-[:HAS_CONSTRAINT]->(c:Constraint {is_active: true})
+            RETURN
+              p.project_id AS project_id,
+              c.constraint_id AS constraint_id,
+              c.key AS constraint_key,
+              c.value AS constraint_value,
+              c.type AS constraint_type,
+              c.reason AS reason,
+              c.source_permalink AS source_permalink,
+              c.author_user_id AS author_user_id,
+              c.created_at AS created_at
+            ORDER BY p.project_id, c.key
+            """
+        )
+        constraints = [record.data() for record in constraints_result]
+
+        dependencies_result = session.run(
+            """
+            MATCH (from_p:Project)-[d:DEPENDS_ON {is_active: true}]->(to_p:Project)
+            RETURN
+              d.dependency_id AS dependency_id,
+              from_p.project_id AS from_project_id,
+              to_p.project_id AS to_project_id,
+              d.reason AS reason,
+              d.source_permalink AS source_permalink,
+              d.author_user_id AS author_user_id,
+              d.created_at AS created_at
+            ORDER BY from_p.project_id, to_p.project_id
+            """
+        )
+        dependencies = [record.data() for record in dependencies_result]
+
+    return {
+        "constraints": constraints,
+        "dependencies": dependencies,
+    }
+
+
 def get_configured_project_ids() -> list[str]:
     return [project.project_id for project in load_projects_config().projects]
 

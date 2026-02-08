@@ -4,8 +4,9 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app.models import SlackEvent
 from app.config import get_settings
+from app.conflicts import detect_conflicts_after_commit
+from app.models import SlackEvent
 from app.service import (
     COMMIT_APPLY_LOCK,
     create_graph_commit,
@@ -170,6 +171,12 @@ async def ingest_slack_event(request: Request) -> dict:
 
         async with COMMIT_APPLY_LOCK:
             commit = create_graph_commit(driver, parsed.proposed_diff, source="slack")
-        return {**result, "parsed": parsed.model_dump(), "commit": commit}
+        conflicts = detect_conflicts_after_commit(driver, parsed.proposed_diff, commit)
+        return {
+            **result,
+            "parsed": parsed.model_dump(),
+            "commit": commit,
+            "conflicts": conflicts,
+        }
 
     return {**result, "parsed": parsed.model_dump()}

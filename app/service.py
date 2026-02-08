@@ -8,7 +8,7 @@ from neo4j import Driver
 from pydantic import ValidationError
 
 from app.config import get_settings, load_projects_config
-from app.models import BootstrapResponse, ParsedMessage, SlackEvent
+from app.models import BootstrapResponse, ParsedMessage, ProposedGraphDiff, SlackEvent
 from app.parser import parse_constraint_update, parse_dependency_update, parse_event
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,31 @@ def send_thread_feedback_stub(channel_id: str, thread_ts: str, text: str) -> Non
         thread_ts,
         text,
     )
+
+
+def get_configured_project_ids() -> list[str]:
+    return [project.project_id for project in load_projects_config().projects]
+
+
+def find_unknown_project_ids(proposed_diff: ProposedGraphDiff) -> list[str]:
+    configured_ids = set(get_configured_project_ids())
+    referenced_ids: list[str] = []
+
+    if proposed_diff.constraint is not None:
+        referenced_ids.append(proposed_diff.constraint.project_id)
+    if proposed_diff.dependency is not None:
+        referenced_ids.extend(
+            [
+                proposed_diff.dependency.from_project_id,
+                proposed_diff.dependency.to_project_id,
+            ]
+        )
+
+    unknown_ids: list[str] = []
+    for project_id in referenced_ids:
+        if project_id not in configured_ids and project_id not in unknown_ids:
+            unknown_ids.append(project_id)
+    return unknown_ids
 
 
 def _fallback_permalink(channel_id: str, message_ts: str) -> str:

@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.models import SlackEvent
 from app.config import get_settings
 from app.service import (
+    find_unknown_project_ids,
+    get_configured_project_ids,
     preprocess_slack_event,
     process_slack_event,
     send_thread_feedback_stub,
@@ -105,5 +107,30 @@ async def ingest_slack_event(request: Request) -> dict:
             "reason": "invalid_format",
             "parsed": parsed.model_dump(),
         }
+
+    if parsed.proposed_diff is not None:
+        unknown_project_ids = find_unknown_project_ids(parsed.proposed_diff)
+        if unknown_project_ids:
+            valid_projects = ", ".join(get_configured_project_ids())
+            send_thread_feedback_stub(
+                channel_id=event.channel,
+                thread_ts=event.ts,
+                text=f"Unknown project_id. Valid projects: {valid_projects}.",
+            )
+            message_id = result.get("message_id")
+            if message_id:
+                update_slack_message_status(
+                    driver,
+                    message_id=message_id,
+                    ingestion_status="invalid_unknown_project",
+                    error_reason=f"unknown_project_id:{','.join(unknown_project_ids)}",
+                )
+            return {
+                **result,
+                "status": "invalid_unknown_project",
+                "reason": "unknown_project_id",
+                "unknown_project_ids": unknown_project_ids,
+                "parsed": parsed.model_dump(),
+            }
 
     return {**result, "parsed": parsed.model_dump()}

@@ -98,6 +98,7 @@ def _create_graph_commit_tx(
     diff_json: str,
     why: str,
     commit_message: str,
+    proposed_diff_data: dict,
 ) -> dict:
     latest = tx.run(
         """
@@ -140,6 +141,109 @@ def _create_graph_commit_tx(
         commit_message=commit_message,
     ).consume()
 
+    tx.run(
+        """
+        MATCH (gc:GraphCommit {commit_id: $commit_id})
+        OPTIONAL MATCH (m:SlackMessage {message_id: $source_message_id})
+        FOREACH (_ IN CASE WHEN m IS NULL THEN [] ELSE [1] END |
+            MERGE (gc)-[:FROM_MESSAGE]->(m)
+        )
+        """,
+        commit_id=commit_id,
+        source_message_id=proposed_diff_data["source_message_id"],
+    ).consume()
+
+    prior_active_constraint_values: list[str] = []
+    mutated_project_ids: list[str] = []
+    if proposed_diff_data["update_type"] == "ConstraintUpsert":
+        constraint = proposed_diff_data["constraint"]
+        result = tx.run(
+            """
+            MATCH (p:Project {project_id: $project_id})
+            OPTIONAL MATCH (p)-[:HAS_CONSTRAINT]->(prior:Constraint {
+                key: $constraint_key,
+                is_active: true
+            })
+            WITH p, collect(prior) AS prior_constraints
+            WITH p, [c IN prior_constraints WHERE c IS NOT NULL | c.value] AS prior_values, prior_constraints
+            FOREACH (c IN prior_constraints |
+                SET c.is_active = false, c.deactivated_at = $timestamp
+            )
+            CREATE (new_constraint:Constraint {
+                constraint_id: $constraint_id,
+                project_id: $project_id,
+                key: $constraint_key,
+                value: $constraint_value,
+                type: $constraint_type,
+                reason: $constraint_reason,
+                is_active: true,
+                source_message_id: $source_message_id,
+                source_permalink: $source_permalink,
+                author_user_id: $actor_user_id,
+                created_at: $timestamp
+            })
+            CREATE (p)-[:HAS_CONSTRAINT]->(new_constraint)
+            WITH p, new_constraint, prior_values
+            MATCH (gc:GraphCommit {commit_id: $commit_id})
+            CREATE (new_constraint)-[:INTRODUCED_BY]->(gc)
+            MERGE (gc)-[:APPLIES_TO]->(p)
+            SET p.updated_at = $timestamp
+            RETURN p.project_id AS project_id, prior_values AS prior_values
+            """,
+            commit_id=commit_id,
+            constraint_id=str(uuid.uuid4()),
+            project_id=constraint["project_id"],
+            constraint_key=constraint["constraint_key"],
+            constraint_value=constraint["constraint_value"],
+            constraint_type=constraint["constraint_type"],
+            constraint_reason=constraint["reason"],
+            source_message_id=proposed_diff_data["source_message_id"],
+            source_permalink=proposed_diff_data["source_permalink"],
+            actor_user_id=actor_user_id,
+            timestamp=timestamp,
+        ).single()
+        if result is None:
+            raise ValueError("ConstraintUpsert failed: target project not found")
+        prior_active_constraint_values = result["prior_values"] or []
+        mutated_project_ids = [result["project_id"]]
+
+    if proposed_diff_data["update_type"] == "DependencyAdd":
+        dependency = proposed_diff_data["dependency"]
+        result = tx.run(
+            """
+            MATCH (from_p:Project {project_id: $from_project_id})
+            MATCH (to_p:Project {project_id: $to_project_id})
+            CREATE (from_p)-[:DEPENDS_ON {
+                dependency_id: $dependency_id,
+                reason: $dependency_reason,
+                is_active: true,
+                source_message_id: $source_message_id,
+                source_permalink: $source_permalink,
+                author_user_id: $actor_user_id,
+                created_at: $timestamp
+            }]->(to_p)
+            WITH from_p, to_p
+            MATCH (gc:GraphCommit {commit_id: $commit_id})
+            MERGE (gc)-[:APPLIES_TO]->(from_p)
+            MERGE (gc)-[:APPLIES_TO]->(to_p)
+            SET from_p.updated_at = $timestamp,
+                to_p.updated_at = $timestamp
+            RETURN from_p.project_id AS from_project_id, to_p.project_id AS to_project_id
+            """,
+            commit_id=commit_id,
+            dependency_id=str(uuid.uuid4()),
+            from_project_id=dependency["from_project_id"],
+            to_project_id=dependency["to_project_id"],
+            dependency_reason=dependency["reason"],
+            source_message_id=proposed_diff_data["source_message_id"],
+            source_permalink=proposed_diff_data["source_permalink"],
+            actor_user_id=actor_user_id,
+            timestamp=timestamp,
+        ).single()
+        if result is None:
+            raise ValueError("DependencyAdd failed: project nodes not found")
+        mutated_project_ids = [result["from_project_id"], result["to_project_id"]]
+
     return {
         "commit_id": commit_id,
         "sequence_number": sequence_number,
@@ -150,6 +254,8 @@ def _create_graph_commit_tx(
         "diff_json": diff_json,
         "why": why,
         "commit_message": commit_message,
+        "mutated_project_ids": mutated_project_ids,
+        "prior_active_constraint_values": prior_active_constraint_values,
     }
 
 
@@ -170,6 +276,7 @@ def create_graph_commit(driver: Driver, proposed_diff: ProposedGraphDiff, source
             diff_json=diff_json,
             why=proposed_diff.reason,
             commit_message=commit_message,
+            proposed_diff_data=proposed_diff.model_dump(),
         )
 
 

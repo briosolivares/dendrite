@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings, load_projects_config
 from app.models import BootstrapResponse, ParsedMessage, SlackEvent
-from app.parser import parse_constraint_update, parse_event
+from app.parser import parse_constraint_update, parse_dependency_update, parse_event
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,20 @@ def process_slack_event(
     message_id = source_message_id or f"{event.channel}:{event.ts}"
     permalink = source_permalink or _fallback_permalink(event.channel, event.ts)
     try:
-        proposed_diff = parse_constraint_update(
-            raw_text=event.text,
-            actor_user_id=event.user,
-            source_message_id=message_id,
-            source_permalink=permalink,
-        )
+        if "depends_on:" in event.text.lower():
+            proposed_diff = parse_dependency_update(
+                raw_text=event.text,
+                actor_user_id=event.user,
+                source_message_id=message_id,
+                source_permalink=permalink,
+            )
+        else:
+            proposed_diff = parse_constraint_update(
+                raw_text=event.text,
+                actor_user_id=event.user,
+                source_message_id=message_id,
+                source_permalink=permalink,
+            )
     except ValueError as exc:
         parsed.parse_error = str(exc)
         return parsed

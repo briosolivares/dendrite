@@ -25,18 +25,27 @@ class ConstraintDiff(BaseModel):
     reason: str
 
 
+class DependencyDiff(BaseModel):
+    from_project_id: str
+    to_project_id: str
+    reason: str
+
+
 class ProposedGraphDiff(BaseModel):
     update_type: Literal["ConstraintUpsert", "DependencyAdd"]
     actor_user_id: str
     source_message_id: str
     source_permalink: str
     constraint: ConstraintDiff | None = None
+    dependency: DependencyDiff | None = None
     reason: str
 
     @model_validator(mode="after")
     def validate_required_payload(self) -> "ProposedGraphDiff":
         if self.update_type == "ConstraintUpsert" and self.constraint is None:
             raise ValueError("constraint is required when update_type is ConstraintUpsert")
+        if self.update_type == "DependencyAdd" and self.dependency is None:
+            raise ValueError("dependency is required when update_type is DependencyAdd")
         return self
 
 

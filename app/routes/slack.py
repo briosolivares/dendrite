@@ -85,5 +85,9 @@ async def ingest_slack_event(request: Request) -> dict:
             thread_ts=event.ts,
             text="Structured update received. Processing.",
         )
-    parsed = process_slack_event(event)
+    parsed = process_slack_event(
+        event,
+        source_message_id=result.get("message_id"),
+        source_permalink=result.get("source_permalink"),
+    )
     return {**result, "parsed": parsed.model_dump()}

@@ -1,4 +1,6 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, model_validator
 
 
 class SlackEvent(BaseModel):
@@ -11,6 +13,31 @@ class SlackEvent(BaseModel):
 class ParsedMessage(BaseModel):
     summary: str
     entities: list[str]
+    proposed_diff: "ProposedGraphDiff | None" = None
+    parse_error: str | None = None
+
+
+class ConstraintDiff(BaseModel):
+    project_id: str
+    constraint_key: str
+    constraint_value: str
+    constraint_type: Literal["DesignChoice", "Requirement"] = "DesignChoice"
+    reason: str
+
+
+class ProposedGraphDiff(BaseModel):
+    update_type: Literal["ConstraintUpsert", "DependencyAdd"]
+    actor_user_id: str
+    source_message_id: str
+    source_permalink: str
+    constraint: ConstraintDiff | None = None
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_required_payload(self) -> "ProposedGraphDiff":
+        if self.update_type == "ConstraintUpsert" and self.constraint is None:
+            raise ValueError("constraint is required when update_type is ConstraintUpsert")
+        return self
 
 
 class BootstrapResponse(BaseModel):

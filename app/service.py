@@ -165,7 +165,12 @@ def _create_graph_commit_tx(
                 is_active: true
             })
             WITH p, collect(prior) AS prior_constraints
-            WITH p, [c IN prior_constraints WHERE c IS NOT NULL | c.value] AS prior_values, prior_constraints
+            WITH p,
+                 [c IN prior_constraints WHERE c IS NOT NULL | {
+                     value: c.value,
+                     author_user_id: c.author_user_id
+                 }] AS prior_constraints_data,
+                 prior_constraints
             FOREACH (c IN prior_constraints |
                 SET c.is_active = false, c.deactivated_at = $timestamp
             )
@@ -183,12 +188,12 @@ def _create_graph_commit_tx(
                 created_at: $timestamp
             })
             CREATE (p)-[:HAS_CONSTRAINT]->(new_constraint)
-            WITH p, new_constraint, prior_values
+            WITH p, new_constraint, prior_constraints_data
             MATCH (gc:GraphCommit {commit_id: $commit_id})
             CREATE (new_constraint)-[:INTRODUCED_BY]->(gc)
             MERGE (gc)-[:APPLIES_TO]->(p)
             SET p.updated_at = $timestamp
-            RETURN p.project_id AS project_id, prior_values AS prior_values
+            RETURN p.project_id AS project_id, prior_constraints_data AS prior_constraints_data
             """,
             commit_id=commit_id,
             constraint_id=str(uuid.uuid4()),
@@ -204,7 +209,8 @@ def _create_graph_commit_tx(
         ).single()
         if result is None:
             raise ValueError("ConstraintUpsert failed: target project not found")
-        prior_active_constraint_values = result["prior_values"] or []
+        prior_constraints_data = result["prior_constraints_data"] or []
+        prior_active_constraint_values = [entry["value"] for entry in prior_constraints_data]
         mutated_project_ids = [result["project_id"]]
 
     if proposed_diff_data["update_type"] == "DependencyAdd":
@@ -256,6 +262,7 @@ def _create_graph_commit_tx(
         "commit_message": commit_message,
         "mutated_project_ids": mutated_project_ids,
         "prior_active_constraint_values": prior_active_constraint_values,
+        "prior_active_constraints": prior_constraints_data if proposed_diff_data["update_type"] == "ConstraintUpsert" else [],
     }
 
 

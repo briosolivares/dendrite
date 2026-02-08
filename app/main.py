@@ -1,7 +1,12 @@
 from fastapi import FastAPI, Request
 
 from app.config import get_settings, validate_runtime_config
-from app.neo4j_client import check_database_health, get_driver, verify_driver_connectivity
+from app.neo4j_client import (
+    check_database_health,
+    get_driver,
+    run_critical_schema_migrations,
+    verify_driver_connectivity,
+)
 from app.routes import bootstrap, read, slack
 
 settings = get_settings()
@@ -17,6 +22,7 @@ def startup() -> None:
     validate_runtime_config()
     driver = get_driver()
     verify_driver_connectivity(driver)
+    run_critical_schema_migrations(driver)
     app.state.neo4j_driver = driver
 
 

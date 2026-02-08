@@ -1,4 +1,5 @@
 import json
+import logging
 from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -10,9 +11,27 @@ from app.config import get_settings, load_projects_config
 from app.models import BootstrapResponse, ParsedMessage, SlackEvent
 from app.parser import parse_event
 
+logger = logging.getLogger(__name__)
+
 
 def process_slack_event(event: SlackEvent) -> ParsedMessage:
     return parse_event(event)
+
+
+def is_structured_attempt(raw_text: str) -> bool:
+    normalized = raw_text.lower()
+    has_project = "project:" in normalized
+    has_mutation = "constraint:" in normalized or "depends_on:" in normalized
+    return has_project and has_mutation
+
+
+def send_thread_feedback_stub(channel_id: str, thread_ts: str, text: str) -> None:
+    logger.info(
+        "thread_feedback_stub channel_id=%s thread_ts=%s text=%s",
+        channel_id,
+        thread_ts,
+        text,
+    )
 
 
 def _fallback_permalink(channel_id: str, message_ts: str) -> str:
@@ -97,6 +116,7 @@ def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
     subtype = event_payload.get("subtype")
     bot_id = event_payload.get("bot_id")
     message_id = event_id or f"{channel_id}:{ts}"
+    structured_attempt = is_structured_attempt(raw_text)
 
     if bot_id or subtype is not None:
         _persist_slack_message(
@@ -163,6 +183,7 @@ def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
         "message_id": message_id,
         "event": event.model_dump(),
         "source_permalink": permalink,
+        "structured_attempt": structured_attempt,
     }
 
 

@@ -6,7 +6,11 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.models import SlackEvent
 from app.config import get_settings
-from app.service import preprocess_slack_event, process_slack_event
+from app.service import (
+    preprocess_slack_event,
+    process_slack_event,
+    send_thread_feedback_stub,
+)
 
 router = APIRouter()
 MAX_SLACK_TIMESTAMP_AGE_SECONDS = 60 * 5
@@ -75,5 +79,11 @@ async def ingest_slack_event(request: Request) -> dict:
         return result
 
     event = SlackEvent.model_validate(result["event"])
+    if result.get("structured_attempt"):
+        send_thread_feedback_stub(
+            channel_id=event.channel,
+            thread_ts=event.ts,
+            text="Structured update received. Processing.",
+        )
     parsed = process_slack_event(event)
     return {**result, "parsed": parsed.model_dump()}

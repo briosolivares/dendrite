@@ -356,6 +356,90 @@ def get_graph_changes_since(driver: Driver, since_iso8601: str) -> dict:
     return {"since": since_iso8601, "commits": commits}
 
 
+def get_project_by_id(driver: Driver, project_id: str) -> dict | None:
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        record = session.run(
+            """
+            MATCH (p:Project {project_id: $project_id})
+            OPTIONAL MATCH (owner:Person)-[:OWNS]->(p)
+            RETURN
+              p.project_id AS project_id,
+              p.name AS name,
+              p.created_at AS created_at,
+              p.updated_at AS updated_at,
+              [user_id IN collect(DISTINCT owner.user_id) WHERE user_id IS NOT NULL] AS owner_user_ids
+            LIMIT 1
+            """,
+            project_id=project_id,
+        ).single()
+    if record is None:
+        return None
+    return record.data()
+
+
+def get_project_checklist(driver: Driver, project_id: str) -> dict | None:
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        project_exists = session.run(
+            """
+            MATCH (p:Project {project_id: $project_id})
+            RETURN p.project_id AS project_id
+            LIMIT 1
+            """,
+            project_id=project_id,
+        ).single()
+        if project_exists is None:
+            return None
+
+        constraints_result = session.run(
+            """
+            MATCH (p:Project {project_id: $project_id})-[:HAS_CONSTRAINT]->(c:Constraint {is_active: true})
+            RETURN
+              c.constraint_id AS constraint_id,
+              c.key AS constraint_key,
+              c.value AS constraint_value,
+              c.type AS constraint_type,
+              c.reason AS reason,
+              c.source_permalink AS source_permalink,
+              c.author_user_id AS author_user_id,
+              c.created_at AS created_at
+            ORDER BY c.type, c.key
+            """,
+            project_id=project_id,
+        )
+        constraints_by_type: dict[str, list[dict]] = {}
+        for record in constraints_result:
+            item = record.data()
+            constraint_type = item.get("constraint_type") or "Unspecified"
+            constraints_by_type.setdefault(constraint_type, []).append(item)
+
+        dependencies_result = session.run(
+            """
+            MATCH (from_p:Project {project_id: $project_id})
+              -[d:DEPENDS_ON {is_active: true}]->
+              (to_p:Project)
+            RETURN
+              d.dependency_id AS dependency_id,
+              from_p.project_id AS from_project_id,
+              to_p.project_id AS to_project_id,
+              d.reason AS reason,
+              d.source_permalink AS source_permalink,
+              d.author_user_id AS author_user_id,
+              d.created_at AS created_at
+            ORDER BY to_p.project_id
+            """,
+            project_id=project_id,
+        )
+        dependencies = [record.data() for record in dependencies_result]
+
+    return {
+        "project_id": project_id,
+        "constraints_by_type": constraints_by_type,
+        "dependencies": dependencies,
+    }
+
+
 def get_configured_project_ids() -> list[str]:
     return [project.project_id for project in load_projects_config().projects]
 

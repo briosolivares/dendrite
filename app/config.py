@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -8,6 +9,13 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 load_dotenv()
+
+AURA_CREDENTIAL_ENV_KEYS = (
+    "NEO4J_URI",
+    "NEO4J_USERNAME",
+    "NEO4J_PASSWORD",
+    "NEO4J_DATABASE",
+)
 
 
 class ConfigError(RuntimeError):
@@ -69,6 +77,47 @@ class ProjectsConfig(BaseModel):
         if len(project_ids) != len(set(project_ids)):
             raise ValueError("projects.project_id values must be unique")
         return self
+
+
+def _parse_key_value_file(file_path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _normalize_neo4j_uri(uri: str) -> str:
+    # Aura files can occasionally contain spacing around :// after copy/paste.
+    return re.sub(r"\s+", "", uri)
+
+
+def _load_neo4j_credentials_from_file() -> None:
+    configured_path = os.getenv("NEO4J_CREDENTIALS_FILE", "").strip()
+    candidate_paths: list[Path] = []
+
+    if configured_path:
+        candidate_paths.append(Path(configured_path))
+    else:
+        candidate_paths.extend(sorted(Path(".").glob("Neo4j-*-Created-*.txt"), reverse=True))
+
+    for candidate_path in candidate_paths:
+        if not candidate_path.exists():
+            continue
+        values = _parse_key_value_file(candidate_path)
+        for key in AURA_CREDENTIAL_ENV_KEYS:
+            if not os.getenv(key) and values.get(key):
+                value = values[key]
+                if key == "NEO4J_URI":
+                    value = _normalize_neo4j_uri(value)
+                os.environ[key] = value
+        return
+
+
+_load_neo4j_credentials_from_file()
 
 
 def _required_env(name: str) -> str:

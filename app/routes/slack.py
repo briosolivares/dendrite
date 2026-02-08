@@ -9,6 +9,8 @@ from app.config import get_settings
 from app.service import (
     find_unknown_project_ids,
     get_configured_project_ids,
+    is_constraint_no_op,
+    is_dependency_no_op,
     preprocess_slack_event,
     process_slack_event,
     send_thread_feedback_stub,
@@ -130,6 +132,37 @@ async def ingest_slack_event(request: Request) -> dict:
                 "status": "invalid_unknown_project",
                 "reason": "unknown_project_id",
                 "unknown_project_ids": unknown_project_ids,
+                "parsed": parsed.model_dump(),
+            }
+
+        message_id = result.get("message_id")
+        if is_constraint_no_op(driver, parsed.proposed_diff):
+            if message_id:
+                update_slack_message_status(
+                    driver,
+                    message_id=message_id,
+                    ingestion_status="no_op_duplicate",
+                    error_reason="constraint_no_op_duplicate",
+                )
+            return {
+                **result,
+                "status": "no_op_duplicate",
+                "reason": "constraint_no_op_duplicate",
+                "parsed": parsed.model_dump(),
+            }
+
+        if is_dependency_no_op(driver, parsed.proposed_diff):
+            if message_id:
+                update_slack_message_status(
+                    driver,
+                    message_id=message_id,
+                    ingestion_status="no_op_duplicate",
+                    error_reason="dependency_no_op_duplicate",
+                )
+            return {
+                **result,
+                "status": "no_op_duplicate",
+                "reason": "dependency_no_op_duplicate",
                 "parsed": parsed.model_dump(),
             }
 

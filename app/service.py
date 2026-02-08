@@ -178,6 +178,64 @@ def update_slack_message_status(
         ).consume()
 
 
+def get_slack_message_status(driver: Driver, *, message_id: str) -> str | None:
+    query = """
+    MATCH (m:SlackMessage {message_id: $message_id})
+    RETURN m.ingestion_status AS ingestion_status
+    LIMIT 1
+    """
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        record = session.run(query, message_id=message_id).single()
+    if record is None:
+        return None
+    return record.get("ingestion_status")
+
+
+def is_constraint_no_op(driver: Driver, proposed_diff: ProposedGraphDiff) -> bool:
+    if proposed_diff.constraint is None:
+        return False
+    query = """
+    MATCH (c:Constraint {
+      project_id: $project_id,
+      key: $constraint_key,
+      value: $constraint_value,
+      is_active: true
+    })
+    RETURN c
+    LIMIT 1
+    """
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        record = session.run(
+            query,
+            project_id=proposed_diff.constraint.project_id,
+            constraint_key=proposed_diff.constraint.constraint_key,
+            constraint_value=proposed_diff.constraint.constraint_value,
+        ).single()
+    return record is not None
+
+
+def is_dependency_no_op(driver: Driver, proposed_diff: ProposedGraphDiff) -> bool:
+    if proposed_diff.dependency is None:
+        return False
+    query = """
+    MATCH (:Project {project_id: $from_project_id})
+      -[d:DEPENDS_ON {is_active: true}]->
+      (:Project {project_id: $to_project_id})
+    RETURN d
+    LIMIT 1
+    """
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        record = session.run(
+            query,
+            from_project_id=proposed_diff.dependency.from_project_id,
+            to_project_id=proposed_diff.dependency.to_project_id,
+        ).single()
+    return record is not None
+
+
 def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
     event_payload = payload.get("event", {})
     if event_payload.get("type") != "message":
@@ -195,6 +253,19 @@ def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
     bot_id = event_payload.get("bot_id")
     message_id = event_id or f"{channel_id}:{ts}"
     structured_attempt = is_structured_attempt(raw_text)
+    existing_status = get_slack_message_status(driver, message_id=message_id)
+    if existing_status in {"processed", "no_op_duplicate"}:
+        update_slack_message_status(
+            driver,
+            message_id=message_id,
+            ingestion_status="no_op_duplicate",
+            error_reason="message_already_processed",
+        )
+        return False, {
+            "ok": True,
+            "status": "no_op_duplicate",
+            "reason": "message_already_processed",
+        }
 
     if bot_id or subtype is not None:
         _persist_slack_message(

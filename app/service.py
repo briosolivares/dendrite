@@ -131,6 +131,28 @@ def _persist_slack_message(
         ).consume()
 
 
+def update_slack_message_status(
+    driver: Driver,
+    *,
+    message_id: str,
+    ingestion_status: str,
+    error_reason: str | None = None,
+) -> None:
+    query = """
+    MATCH (m:SlackMessage {message_id: $message_id})
+    SET m.ingestion_status = $ingestion_status,
+        m.error_reason = $error_reason
+    """
+    settings = get_settings()
+    with driver.session(database=settings.neo4j_database) as session:
+        session.run(
+            query,
+            message_id=message_id,
+            ingestion_status=ingestion_status,
+            error_reason=error_reason,
+        ).consume()
+
+
 def preprocess_slack_event(driver: Driver, payload: dict) -> tuple[bool, dict]:
     event_payload = payload.get("event", {})
     if event_payload.get("type") != "message":

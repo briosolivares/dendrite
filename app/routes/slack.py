@@ -10,6 +10,7 @@ from app.service import (
     preprocess_slack_event,
     process_slack_event,
     send_thread_feedback_stub,
+    update_slack_message_status,
 )
 
 router = APIRouter()
@@ -79,15 +80,30 @@ async def ingest_slack_event(request: Request) -> dict:
         return result
 
     event = SlackEvent.model_validate(result["event"])
-    if result.get("structured_attempt"):
-        send_thread_feedback_stub(
-            channel_id=event.channel,
-            thread_ts=event.ts,
-            text="Structured update received. Processing.",
-        )
     parsed = process_slack_event(
         event,
         source_message_id=result.get("message_id"),
         source_permalink=result.get("source_permalink"),
     )
+    if result.get("structured_attempt") and parsed.parse_error:
+        send_thread_feedback_stub(
+            channel_id=event.channel,
+            thread_ts=event.ts,
+            text="Could not parse update. Please follow the pinned template.",
+        )
+        message_id = result.get("message_id")
+        if message_id:
+            update_slack_message_status(
+                driver,
+                message_id=message_id,
+                ingestion_status="ignored",
+                error_reason="invalid_format",
+            )
+        return {
+            **result,
+            "status": "ignored",
+            "reason": "invalid_format",
+            "parsed": parsed.model_dump(),
+        }
+
     return {**result, "parsed": parsed.model_dump()}

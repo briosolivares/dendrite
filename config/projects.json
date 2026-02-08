@@ -1,0 +1,23 @@
+{
+  "slack": {
+    "channel_name": "Intern Project",
+    "channel_id": "C12345678"
+  },
+  "projects": [
+    {
+      "project_id": "proj-onboarding",
+      "name": "Intern Onboarding Service",
+      "owner_user_ids": [
+        "U111",
+        "U222"
+      ]
+    },
+    {
+      "project_id": "proj-docs",
+      "name": "Intern Docs Portal",
+      "owner_user_ids": [
+        "U333"
+      ]
+    }
+  ]
+}
